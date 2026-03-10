@@ -224,7 +224,7 @@ Each run creates a new csv file with all the current jobs listed on the portal. 
 
 ## Tech Stack
 
-- **Python 3.11**
+- **Python 3.11 or greater**
 - **Playwright** — browser automation and network interception
 - **Microsoft Edge** — browser used for scraping
 - **Typesense API** — Simplify's internal search API (intercepted via network listener)
