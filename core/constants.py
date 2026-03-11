@@ -4,7 +4,7 @@ class SimplifyConstants:
     BASE_URL:   str = "https://simplify.jobs"
     JOBS_URL:   str = "https://simplify.jobs/jobs"
     API_HOST:   str = "js-ha.simplify.jobs"
-    API_DETAIL: str = "https://api.simplify.jobs/v2/job-posting"
+    API_DETAIL: str = "https://api.simplify.jobs/v2/job-posting/:id"
     SOURCE_NAME: str = "Simplify.jobs"
 
     # Typesense multi_search endpoint keyword

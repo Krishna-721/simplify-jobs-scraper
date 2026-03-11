@@ -15,8 +15,9 @@ build/
 output/*
 !output/.gitkeep
 
-# Session (contains login cookies) - if login implemented
-session.json
+# Session (contains login cookies)
+auth/cookies.json
+
 
 # IDE
 .vscode/
