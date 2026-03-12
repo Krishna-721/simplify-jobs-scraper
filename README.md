@@ -109,7 +109,7 @@ So there's no need to click UI buttons- just build the right URL and navigate to
 ---
 
 ### Why not use response headers? 
-using response interception but the /company endpoint only fires when a job card is clicked, which would require clicking 400 cards and waiting for each response — slower and more fragile.
+Tried using response interception but the /company endpoint only fires when a job card is clicked, which would require clicking 400 cards and waiting for each response — slower and more fragile.
 
 ## Data Fields Collected
 
@@ -123,7 +123,7 @@ using response interception but the /company endpoint only fires when a job card
 | `employment_type` | ✅ Populated | Full-Time / Internship / Part-Time |
 | `search_keyword` | ✅ Populated | The keyword used to find this job |
 | `description` | ✅ Populated | Fetched via detail API (requires login session) |
-| `salary_range` | ⚠️ Partial | Populated when the employer provides salary info; empty otherwise since most postings don't list it |
+| `salary_range` | ✅ Populated | Populated when the employer provides salary info; empty otherwise since most postings don't list it |
 
 ---
 

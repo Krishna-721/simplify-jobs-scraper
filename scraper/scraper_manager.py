@@ -11,6 +11,7 @@ from exporter.data_exporter import DataExporter
 
 import re
 import json
+from bs4 import BeautifulSoup
 
 class SimplifyScraper:
     """
@@ -103,8 +104,11 @@ class SimplifyScraper:
                 """, url)
 
                 job.description = data.get("description") or ""
-                job.description = re.sub(r'<[^>]+>', ' ', job.description).strip()
-                job.description = re.sub(r'\s+', ' ', job.description)
+                
+                # striping tags using soup
+                soup = BeautifulSoup(job.description, "html.parser")
+                job.description = soup.get_text(separator=" ").strip()
+                job.description = " ".join(job.description.split())
 
                 min_s    = data.get("min_salary")
                 max_s    = data.get("max_salary")
@@ -171,7 +175,7 @@ class SimplifyScraper:
         scroll_num = 0
         while len(all_jobs) < max_jobs:
             scroll_num += 1
-            print(f"  Scroll {scroll_num}... ({len(all_jobs)}/{max_jobs} jobs collected)")
+            print(f"  Scroll {scroll_num}... ({len(all_jobs) + len(pending)}/{max_jobs} jobs found)")
             self._captured_docs.clear()
 
             got_more = await self._scroll_and_wait()
