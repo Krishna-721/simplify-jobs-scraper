@@ -5,9 +5,8 @@ class ScraperConfig:
     """Configuration for Simplify.jobs scraper."""
 
     # Limits
-    MAX_TOTAL_JOBS: int = 500
-    JOBS_PER_SCROLL: int = 21    # 21 jobs will get loaded per batch basically BATCH processing
-    MAX_SCROLLS: int = 10
+    MAX_JOBS:   int = 400
+    BATCH_SIZE: int = 100
 
     # Orders for Browser 
     HEADLESS: bool = False
@@ -40,7 +39,7 @@ class ScraperConfig:
             "experience_level": data.get("experience_level", cls.DEFAULT_EXPERIENCE),
             "remote_option":    data.get("remote_option", cls.DEFAULT_REMOTE),
             "category":         data.get("category", []),
-            "max_scrolls":      data.get("max_scrolls", cls.MAX_SCROLLS),
+            "max_jobs":      data.get("max_jobs", cls.MAX_JOBS),
         }
 
     @classmethod

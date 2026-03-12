@@ -10,7 +10,7 @@ A Python-based job scraper built for Simplify.jobs using Playwright for browser 
 - Applies filters like employment type, experience level, remote options, and location
 - Scrapes job listings and exports them to CSV files in the `output/` folder
 - Each keyword gets its own CSV file with a timestamp in the name
-- On every new run, a new csv is created with a new timestamp which acts as the serial number.
+- On subsequent runs, new jobs are **merged** with existing data — duplicates are skipped based on link URL, and the CSV is re-saved with an updated timestamp
 
 ---
 
@@ -27,13 +27,18 @@ Simplify_Scraper/
 │
 ├── scraper/                  # All scraping logic
 │   ├── __init__.py
-│   ├── browser_client.py     # Playwright browser start/close
+│   ├── browser_client.py     # Playwright browser start/close (persistent Edge profile)
 │   ├── url_builder.py        # Builds filtered search URLs
 │   ├── parser.py        # Parses Typesense API JSON → JobListing
-│   └── scraper.py       # Main orchestrator 
+│   └── scraper.py       # Main orchestrator (scroll, intercept, fetch descriptions)
+│
 ├── exporter/            # CSV export
 │   ├── __init__.py
-│   └── data_exporter.py      # Saves jobs to timestamped CSV
+│   └── data_exporter.py      # Saves/merges jobs to timestamped CSV with deduplication
+│
+├── auth/                # Authentication helpers
+│   ├── __init__.py
+│   └── login.py         # Manual login flow — saves session for description fetching
 │
 ├── output/                   # Generated CSV files go here
 ├── __init__.py
@@ -90,8 +95,9 @@ Then we dig in to this layer by layer -
 
 After this step the parser.py maps each filed to the jobs list.
 ```
-5. An infinite scroll attempt is made to load more jobs (more on this below)
-6. All jobs are saved to CSV
+5. Infinite scroll loads additional batches (~20 jobs each) via mouse wheel simulation
+6. Descriptions are fetched via the detail API (requires login session)
+7. All jobs are deduplicated and saved/merged to CSV
 
 ### URL Filter System
 Simplify.jobs encodes all filters directly in the URL, for example:
@@ -101,6 +107,9 @@ https://simplify.jobs/jobs?query=Data+Science&state=North+America&jobType=Full-T
 So there's no need to click UI buttons- just build the right URL and navigate to it.
 
 ---
+
+### Why not use response headers? 
+using response interception but the /company endpoint only fires when a job card is clicked, which would require clicking 400 cards and waiting for each response — slower and more fragile.
 
 ## Data Fields Collected
 
@@ -113,47 +122,54 @@ So there's no need to click UI buttons- just build the right URL and navigate to
 | `source` | ✅ Populated | Always "Simplify.jobs" |
 | `employment_type` | ✅ Populated | Full-Time / Internship / Part-Time |
 | `search_keyword` | ✅ Populated | The keyword used to find this job |
-| `description` | ⚠️ Empty | Requires login (see below) |
-| `salary_range` | ⚠️ Empty | Requires login (see below) |
+| `description` | ✅ Populated | Fetched via detail API (requires login session) |
+| `salary_range` | ⚠️ Partial | Populated when the employer provides salary info; empty otherwise since most postings don't list it |
 
 ---
 
-## What I Tried — Infinite Scroll Pagination
+## Infinite Scroll Pagination
 
 Getting more than one batch of jobs (~40) was the hardest part of this project. Simplify uses **infinite scroll** (not page numbers), meaning to get more jobs you have to scroll down to trigger a new API call.
 
-Here's everything I tried:
+Here's the journey:
 
-### Attempt 1 — `window.scrollTo(0, document.body.scrollHeight)`
-The most common scroll approach. Didn't work because Simplify uses a **virtualized list** — the page body height doesn't grow when new jobs load, it just swaps DOM elements in and out.
+### Failed Attempts
+1. **`window.scrollTo(0, document.body.scrollHeight)`** — Didn't work because Simplify uses a **virtualized list**; the page body height doesn't grow.
+2. **Find scrollable container via `getComputedStyle`** — Found `.rfm-marquee-container` but that was just a banner.
+3. **`End` key press** — Didn't trigger the scroll listener.
+4. **`page.mouse.wheel()` on the page body** — Still didn't trigger new jobs.
 
-### Attempt 2 — Find the scrollable container
-Tried to find the actual scrollable element using `getComputedStyle` to check for `overflow: auto/scroll`. Found a `.rfm-marquee-container` element but that was just a banner, not the job list.
+### Working Solution
+The key was identifying the **correct scrollable container**: `.gap-4.overflow-y-auto.flex-col`. Once the mouse is moved to the center of this container, `page.mouse.wheel()` successfully triggers the Typesense API call.
 
-### Attempt 3 — `End` key press
-Simulated keyboard `End` key to scroll to the bottom of the page. Didn't trigger the Simplify scroll listener.
+The scroll logic:
+1. Locate the container and get its bounding box
+2. Move the mouse to the center of the container
+3. Fire 8 mouse wheel events (500px each, 300ms apart) while waiting for an API response (12s timeout)
+4. If no response, retry once before stopping
+5. Repeat until `max_jobs` (default: 400) is reached
 
-### Attempt 4 — `page.mouse.wheel()`
-Simulated physical mouse wheel scrolling. Still didn't trigger more jobs loading.
-
-### Current Status
-The first batch loads perfectly (~40 jobs per keyword). Infinite scroll pagination is not yet working due to Simplify's virtualized list implementation. This is a known limitation and can be fixed in a future update once the exact scrollable container is identified via browser DevTools.
+Each scroll triggers one Typesense API call that returns a variable number of jobs (typically 20–40, sometimes more or less — this is controlled by Simplify's API, not our code). Jobs are accumulated into a `pending` buffer; once it reaches `batch_size` (default: 100), the scraper pauses scrolling, fetches descriptions for that batch via the detail API, then resumes. A full run can collect up to `max_jobs` (default: 400) per keyword.
 
 ---
 
-## Why Description and Salary Are Empty
+## Salary Fetching
 
-During development I discovered that Simplify.jobs has a detail API:
+Simplify.jobs has a detail API:
 ```
-https://api.simplify.jobs/v2/job-posting/{job_id}
+https://api.simplify.jobs/v2/job-posting/{job_id}/company
 ```
 
-However, this endpoint returns `{"detail": "Not Found"}` without authentication. Both description and salary are behind login.
+The scraper now **automatically fetches descriptions** after collecting all job listings. It calls the detail API for each job, strips HTML tags, and stores the cleaned text.
 
-**To enable descriptions in the future:**
-1. Run `login.py` (to be implemented) to log in manually and save the browser session to `session.json`
-2. Load `session.json` in `BrowserClient` on startup
-3. Re-enable `await self._fetch_descriptions(all_jobs)` in `scraper.py`
+However, this endpoint requires authentication — without a valid session it returns `{"detail": "Not Found"}`.
+
+**To enable authenticated scraping:**
+1. Run `python auth/login.py` — this opens Edge and lets you log in manually; after you press Enter it saves the session to `session.json`
+2. Press Enter in the terminal after logging in
+3. The scraper uses a persistent Edge profile (`BrowserClient` launches with your real Edge user data directory), so if you're already logged into Simplify in Edge, descriptions should populate automatically
+
+> **Note:** Some postings don't display the salary part. They mostly say "No salary listed". 
 
 ---
 
@@ -197,12 +213,13 @@ INPUT = {
         "Data Analyst",
         "Machine Learning",
     ],
-    "location":         "North America", # can be anything
+    "location":         "North America",
     "employment_type":  ["Full-Time", "Internship"],
     "experience_level": ["Entry Level/New Grad", "Internship"],
     "remote_option":    ["Remote", "Hybrid", "In Person"],
-    "category":         [],   # empty = all categories
-    "max_scrolls":      5,    # can be increased
+    "category":         [],       # empty = all categories
+    "max_jobs":         400,      # stop after collecting this many jobs per keyword
+    "batch_size":       100,      # fetch descriptions in chunks of this size
 }
 ```
 
@@ -218,7 +235,7 @@ output/
 └── jobs_machine_learning_20260309_181720.csv
 ```
 
-Each run creates a new csv file with all the current jobs listed on the portal. This helps in identifying how many and what kind of jobs have been posted at each timestamp.
+On each run, the exporter checks for an existing CSV for that keyword. If found, it loads the old jobs, deduplicates by link URL, merges new jobs at the end, and writes a single updated CSV with a fresh timestamp (the old file is deleted). This means you can run the scraper repeatedly and it will accumulate unique jobs over time.
 
 ---
 
@@ -233,9 +250,8 @@ Each run creates a new csv file with all the current jobs listed on the portal. 
 
 ## Known Limitations
 
-1. **~40 jobs per keyword** — infinite scroll not working yet due to virtualized list
-2. **No description/salary** — protected behind Simplify's login barrier
-3. **Single location per run** — scraping multiple locations requires multiple runs. Using list in the location input will break the url_builder.  
+**Single location per run** — scraping multiple locations requires multiple runs; using a list in the location input will break the URL builder
+
 ---
 
 ## References

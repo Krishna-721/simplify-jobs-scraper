@@ -78,13 +78,14 @@ def main():
         "experience_level": ["Entry Level/New Grad", "Internship"],
         "remote_option":    ["Remote", "Hybrid", "In Person"],
         "category":         [],       # all categories
-        # "max_scrolls":      3,        # 5 scrolls per keyword 
+        "max_jobs":   400,
+        "batch_size": 100,
     }
     output_dir="output"
 
     manager = ScraperManager(output_dir=output_dir)
     manager.register(SimplifyScraper)
-    asyncio.run(manager.run(INPUT))
+    asyncio.run(manager.run(INPUT)) 
 
 if __name__ == "__main__":
     main()

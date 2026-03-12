@@ -59,6 +59,7 @@ class SimplifyScraper:
 
         try:
             container = page.locator('.gap-4.overflow-y-auto.flex-col').first
+            await container.wait_for(timeout=15_000)
             box = await container.bounding_box()
 
             if not box:
@@ -88,11 +89,8 @@ class SimplifyScraper:
             return False
 
     # ── Description fetcher ──────────────────────────────────────────────
-
-    async def _fetch_descriptions(self, jobs: List[JobListing]) -> None:
-        print("=========================")
-        print(f"  Fetching descriptions for {len(jobs)} jobs...")
-        print("=========================")
+    async def _fetch_batch_details(self, jobs: List[JobListing], batch_num: int, total: int) -> None:
+        print(f"  [Batch {batch_num}] Fetching details for {len(jobs)} jobs...")
         for i, job in enumerate(jobs):
             try:
                 job_id = job.link.split("/")[-1]
@@ -104,96 +102,108 @@ class SimplifyScraper:
                     }
                 """, url)
 
-                if i == 0:
-                    print(f"  [DEBUG] Full response: {json.dumps(data, default=str)}")
-
                 job.description = data.get("description") or ""
                 job.description = re.sub(r'<[^>]+>', ' ', job.description).strip()
                 job.description = re.sub(r'\s+', ' ', job.description)
 
-                print(f"  [{i+1}/{len(jobs)}] ✓ {job.title[:40]}")
-            except Exception as e:
-                print(f"  [{i+1}/{len(jobs)}] ✗ failed: {e}")
+                min_s    = data.get("min_salary")
+                max_s    = data.get("max_salary")
+                period   = data.get("salary_period")
+                currency = data.get("currency_type", "USD")
+                if min_s and max_s:
+                    period_label = "/hr" if period == 1 else "/yr"
+                    job.salary_range = f"{currency} {min_s} - {max_s} {period_label}"
+                elif min_s:
+                    job.salary_range = f"{currency} {min_s}+"
 
-    # ======== Main scrape ===========
+            except Exception:
+                pass
 
+        print(f"  [Batch {batch_num}] ✓ Done. Total so far: {total}")
+
+    # Main scraping part
     async def scrape_jobs(
         self,
         filters: Dict[str, Any],
         output_dir: str = "output",
     ) -> List[JobListing]:
-        """
-        Full scraping workflow per keyword:
-          1. Navigate to filtered URL
-          2. Collect first batch via network interception
-          3. Scroll to load more batches
-          4. Fetch descriptions via detail API
-          5. Export CSV
-        Note: Browser is started/closed by ScraperManager, not here.
-        """
-        keyword     = filters.get("keyword", "")
-        max_scrolls = filters.get("max_scrolls", self.config.MAX_SCROLLS)
-        state       = self.state_manager.load_state()
-        all_jobs:   List[JobListing] = []
-        seen_links: set              = set()
+
+        keyword    = filters.get("keyword", "")
+        max_jobs   = filters.get("max_jobs",   self.config.MAX_JOBS)
+        batch_size = filters.get("batch_size", self.config.BATCH_SIZE)
+        state      = self.state_manager.load_state()
+        all_jobs:  List[JobListing] = []
+        pending:   List[JobListing] = []
+        seen_links: set = set()
+        batch_num  = 0
 
         await self._setup_interceptor()
 
-        # Navigate and wait for first API response
         url = self.url_builder.build_search_url(filters)
         print(f"[Scraper] Navigating: {url[:80]}...")
 
         async with self.browser.page.expect_response(
-            lambda r: (
-                self.constants.SEARCH_ENDPOINT in r.url
-                and self.constants.API_HOST in r.url
-            ),
+            lambda r: self.constants.SEARCH_ENDPOINT in r.url
+            and self.constants.API_HOST in r.url,
             timeout=30_000,
         ) as _:
-            await self.browser.page.goto(
-                url, wait_until="domcontentloaded", timeout=30_000
-            )
+            await self.browser.page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
         await self.browser.page.wait_for_timeout(6_000)
 
+        # Helper to drain pending buffer in batch_size chunks
+        async def drain_pending():
+            nonlocal batch_num
+            while len(pending) >= batch_size and len(all_jobs) < max_jobs:
+                batch = pending[:batch_size]
+                del pending[:batch_size]
+                batch_num += 1
+                await self._fetch_batch_details(batch, batch_num, len(all_jobs) + len(batch))
+                all_jobs.extend(batch)
+
         # First batch
         new_jobs = self._flush_captured(keyword, seen_links)
-        all_jobs.extend(new_jobs)
-        print(f"  First load: +{len(new_jobs)} jobs (total: {len(all_jobs)})")
+        pending.extend(new_jobs)
+        print(f"  First load: +{len(new_jobs)} jobs (pending: {len(pending)})")
+        await drain_pending()
 
         # Scroll for more
-        for scroll_num in range(1, max_scrolls + 1):
-            print(f"  Scroll {scroll_num}/{max_scrolls}...")
+        scroll_num = 0
+        while len(all_jobs) < max_jobs:
+            scroll_num += 1
+            print(f"  Scroll {scroll_num}... ({len(all_jobs)}/{max_jobs} jobs collected)")
             self._captured_docs.clear()
 
             got_more = await self._scroll_and_wait()
             if not got_more:
                 print("  Retrying, please wait...")
                 got_more = await self._scroll_and_wait()
-
             if not got_more:
-                print("  All available jobs loaded for this keyword.")
+                print("  All available jobs loaded.")
                 break
 
             await self.browser.page.wait_for_timeout(1_000)
             new_jobs = self._flush_captured(keyword, seen_links)
-            all_jobs.extend(new_jobs)
-            print(f"  +{len(new_jobs)} new jobs (total: {len(all_jobs)})")
-
-            if len(new_jobs) == 0:
+            if not new_jobs:
                 print("  No unique jobs left — stopping.")
                 break
 
-            state.increment_scroll()
-            state.add_scraped(len(new_jobs))
+            pending.extend(new_jobs)
+            print(f"  +{len(new_jobs)} new jobs (pending: {len(pending)})")
+            await drain_pending()
 
-        else:
-            print(f"  Max scrolls ({max_scrolls}) reached.")
+        # Process partial last batch
+        if pending and len(all_jobs) < max_jobs:
+            batch_num += 1
+            remaining = pending[:max_jobs - len(all_jobs)]
+            print(f"  Partial batch: {len(remaining)}/{batch_size} jobs — processing...")
+            await self._fetch_batch_details(remaining, batch_num, len(all_jobs) + len(remaining))
+            all_jobs.extend(remaining)
 
-        # Fetch descriptions
-        await self._fetch_descriptions(all_jobs)
+        if len(all_jobs) >= max_jobs:
+            print(f"  Max jobs ({max_jobs}) reached.")
+            all_jobs = all_jobs[:max_jobs]
 
-        # Export
         self.data_exporter.save_to_csv(all_jobs, output_dir=output_dir, keyword=keyword)
         print(f"[Scraper] Done. Total unique jobs: {len(all_jobs)}")
         return all_jobs
