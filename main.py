@@ -11,7 +11,7 @@ Each keyword gets its own CSV in the output/ folder.
 import asyncio
 from typing import Dict, Any, List
 
-from scraper.scraper import SimplifyScraper
+from scraper.scraper_manager import SimplifyScraper
 from core.config import ScraperConfig
 from core.models import JobListing
 

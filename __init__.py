@@ -1,4 +1,4 @@
-from scraper.scraper import SimplifyScraper
+from scraper.scraper_manager import SimplifyScraper
 from scraper.parser import SimplifyParser
 from core.models import JobListing, ScraperState
 from core.config import ScraperConfig
