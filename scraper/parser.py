@@ -26,6 +26,9 @@ class SimplifyParser:
 
     def parse_single_doc(self, doc: Dict[str, Any], keyword: str) -> Optional[JobListing]:
         """Map one Typesense document → JobListing."""
+        # if not hasattr(self, '_printed_keys'):
+        #     self._printed_keys = True
+        #     print(f"  [DEBUG] doc keys: {list(doc.keys())}")
         slug = (
             doc.get("slug")
             or doc.get("id")

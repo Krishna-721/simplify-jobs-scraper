@@ -18,10 +18,10 @@ A Python-based job scraper built for Simplify.jobs using Playwright for browser 
 
 ```
 Simplify_Scraper/
-├── core/                # Core data models, config, constants
+├── core/                     # Core data models, config, constants
 │   ├── __init__.py
-│   ├── models.py        # JobListing and ScraperState dataclasses
-│   ├── config.py        # All settings (timeouts, defaults, limits)
+│   ├── models.py             # JobListing and ScraperState dataclasses
+│   ├── config.py             # All settings (timeouts, defaults, limits)
 │   ├── constants.py          # URLs and API endpoint constants
 │   └── state_manager.py      # Tracks scroll position and job counts
 │
@@ -29,20 +29,20 @@ Simplify_Scraper/
 │   ├── __init__.py
 │   ├── browser_client.py     # Playwright browser start/close (persistent Edge profile)
 │   ├── url_builder.py        # Builds filtered search URLs
-│   ├── parser.py        # Parses Typesense API JSON → JobListing
-│   └── scraper.py       # Main orchestrator (scroll, intercept, fetch descriptions)
+│   ├── parser.py             # Parses Typesense API JSON → JobListing
+│   └── scraper.py            # Main orchestrator (scroll, intercept, fetch descriptions)
 │
-├── exporter/            # CSV export
+├── exporter/                 # CSV export
 │   ├── __init__.py
 │   └── data_exporter.py      # Saves/merges jobs to timestamped CSV with deduplication
 │
-├── auth/                # Authentication helpers
+├── auth/                     # Authentication helpers
 │   ├── __init__.py
-│   └── login.py         # Manual login flow — saves session for description fetching
+│   └── login.py              # Manual login flow — saves session for description fetching
 │
 ├── output/                   # Generated CSV files go here
 ├── __init__.py
-├── main.py          # Entry point — configure keywords and filters here
+├── main.py                   # Entry point — configure keywords and filters here
 ├── requirements.txt
 └── README.md
 ```
@@ -52,14 +52,14 @@ Simplify_Scraper/
 ## How It Works
 
 ### Discovery Phase
-The first step I did was open Simplify.jobs in Chrome DevTools and observed the Network tab while browsing jobs. I noticed the site is a React/Next.js SPA and doesn't load jobs through normal HTML — instead it calls a **Typesense search API** in the background.
+The first step was opening Simplify.jobs in Chrome DevTools and observing the Network tab while browsing jobs. The site is a React/Next.js SPA and doesn't load jobs through normal HTML — instead it calls a **Typesense search API** in the background.
 
 The API endpoint is:
 ```
 https://js-ha.simplify.jobs/multi_search?x-typesense-api-key=...
 ```
 
-This was a huge observation because it meant I didn't need to scrape HTML at all rather I could just intercept the API responses directly using Playwright's `page.on("response", ...)` listener.
+This was a key observation because it meant there was no need to scrape HTML at all — instead the API responses could be intercepted directly using Playwright's `page.on("response", ...)` listener.
 
 ### How Scraping Works
 1. Browser opens the filtered Simplify.jobs URL (filters are encoded in the URL params)
@@ -67,7 +67,7 @@ This was a huge observation because it meant I didn't need to scrape HTML at all
 3. When the page loads, Simplify fires this API and returns ~40 job listings
 4. We parse the JSON response and extract: title, company, location, link, employment type.
 ```
-In scraper.py --> body = await response.json(). Here the interceptor caches the response which looks like this :
+In scraper.py --> body = await response.json(). Here the interceptor caches the response which looks like this:
 {
   "results": [
     {
@@ -78,25 +78,23 @@ In scraper.py --> body = await response.json(). Here the interceptor caches the 
             "company_name": "Google",
             "locations": ["New York, NY, USA"],
             "slug": "abc123",
-            "type": "Full-Time",
-            "salary_min": "",
-            "salary_max": ""
+            "type": "Full-Time"
           }
         }
       ]
     }
   ]
 }
-Then we dig in to this layer by layer - 
+Then we dig into this layer by layer -
 
         for result in body.get("results", []):    
             for hit in result.get("hits", []):       
                 doc = hit.get("document", {})
 
-After this step the parser.py maps each filed to the jobs list.
+After this step the parser.py maps each field to the jobs list.
 ```
 5. Infinite scroll loads additional batches (~20 jobs each) via mouse wheel simulation
-6. Descriptions are fetched via the detail API (requires login session)
+6. Descriptions and salary are fetched in batches via the detail API (requires login session)
 7. All jobs are deduplicated and saved/merged to CSV
 
 ### URL Filter System
@@ -104,12 +102,14 @@ Simplify.jobs encodes all filters directly in the URL, for example:
 ```
 https://simplify.jobs/jobs?query=Data+Science&state=North+America&jobType=Full-Time%3BInternship&experience=Entry+Level%2FNew+Grad
 ```
-So there's no need to click UI buttons- just build the right URL and navigate to it.
+So there's no need to click UI buttons — just build the right URL and navigate to it.
 
 ---
 
-### Why not use response headers? 
-Tried using response interception but the /company endpoint only fires when a job card is clicked, which would require clicking 400 cards and waiting for each response — slower and more fragile.
+### Why not use response headers?
+Tried using response interception for descriptions but the `/company` endpoint only fires when a job card is clicked, which would require clicking 400 cards and waiting for each response — slower and more fragile. The authenticated `fetch()` approach from inside the browser context is faster and more reliable.
+
+---
 
 ## Data Fields Collected
 
@@ -149,18 +149,18 @@ The scroll logic:
 4. If no response, retry once before stopping
 5. Repeat until `max_jobs` (default: 400) is reached
 
-Each scroll triggers one Typesense API call that returns a variable number of jobs (typically 20–40, sometimes more or less — this is controlled by Simplify's API, not our code). Jobs are accumulated into a `pending` buffer; once it reaches `batch_size` (default: 100), the scraper pauses scrolling, fetches descriptions for that batch via the detail API, then resumes. A full run can collect up to `max_jobs` (default: 400) per keyword.
+Each scroll triggers one Typesense API call that returns a variable number of jobs (typically 20–40). Jobs are accumulated into a `pending` buffer; once it reaches `batch_size` (default: 100), the scraper pauses scrolling, fetches descriptions and salary for that batch via the detail API, then resumes. A full run collects up to `max_jobs` (default: 400) per keyword.
 
 ---
 
-## Salary Fetching
+## Description & Salary Fetching
 
 Simplify.jobs has a detail API:
 ```
 https://api.simplify.jobs/v2/job-posting/{job_id}/company
 ```
 
-The scraper now **automatically fetches descriptions** after collecting all job listings. It calls the detail API for each job, strips HTML tags, and stores the cleaned text.
+The scraper fetches descriptions and salary **in batches of `batch_size` (default: 100) during the scroll phase** — not after all jobs are collected. This keeps the scraper efficient and avoids long waits at the end of a run.
 
 However, this endpoint requires authentication — without a valid session it returns `{"detail": "Not Found"}`.
 
@@ -169,7 +169,7 @@ However, this endpoint requires authentication — without a valid session it re
 2. Press Enter in the terminal after logging in
 3. The scraper uses a persistent Edge profile (`BrowserClient` launches with your real Edge user data directory), so if you're already logged into Simplify in Edge, descriptions should populate automatically
 
-> **Note:** Some postings don't display the salary part. They mostly say "No salary listed". 
+> **Note:** Some postings don't display salary. They will show an empty salary field since most postings don't list compensation publicly.
 
 ---
 
@@ -258,4 +258,3 @@ On each run, the exporter checks for an existing CSV for that keyword. If found,
 
 - [Playwright Python Docs](https://playwright.dev/python/)
 - [Simplify.jobs](https://simplify.jobs)
-- Claude.ai as a paired partner.

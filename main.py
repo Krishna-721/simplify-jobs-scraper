@@ -69,9 +69,10 @@ def main():
         "keywords": [
             "Data Science",
             # "Data Analyst",
-             "Machine Learning",
-            # "AI Engineer",
-            # "Software Developer","Backend Developer"
+            "Machine Learning",
+            "AI Engineer",
+            #"Software Developer",
+            # "Backend Developer"
         ],
         "location":         "North America",# "India","Canada","UK","Australia"],
         "employment_type":  ["Full-Time", "Internship"],

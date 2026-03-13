@@ -112,14 +112,20 @@ class SimplifyScraper:
 
                 min_s    = data.get("min_salary")
                 max_s    = data.get("max_salary")
+                
                 period   = data.get("salary_period")
                 currency = data.get("currency_type", "USD")
-                if min_s and max_s:
+                
+                min_s = data.get("min_salary")
+                max_s = data.get("max_salary")
+
+                if min_s is not None and max_s is not None:
                     period_label = "/hr" if period == 1 else "/yr"
                     job.salary_range = f"{currency} {min_s} - {max_s} {period_label}"
-                elif min_s:
+                elif min_s is not None:
                     job.salary_range = f"{currency} {min_s}+"
-
+                else:
+                    job.salary_range = "Not Disclosed"
             except Exception:
                 pass
 
