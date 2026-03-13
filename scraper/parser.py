@@ -26,9 +26,6 @@ class SimplifyParser:
 
     def parse_single_doc(self, doc: Dict[str, Any], keyword: str) -> Optional[JobListing]:
         """Map one Typesense document → JobListing."""
-        # if not hasattr(self, '_printed_keys'):
-        #     self._printed_keys = True
-        #     print(f"  [DEBUG] doc keys: {list(doc.keys())}")
         slug = (
             doc.get("slug")
             or doc.get("id")
@@ -42,25 +39,23 @@ class SimplifyParser:
             ", ".join(locations) if isinstance(locations, list) else str(locations)
         )
 
-        salary = doc.get("salary") or doc.get("salary_range") or ""
-        if not salary:
-            lo = doc.get("salary_min", "")
-            hi = doc.get("salary_max", "")
-            if lo or hi:
-                salary = f"${lo} - ${hi}"
-
         emp_type = doc.get("type") or doc.get("employment_type") or ""
         if isinstance(emp_type, list):
             emp_type = ", ".join(emp_type)
 
-        return JobListing(
+        job = JobListing(
             title=doc.get("title", ""),
             company=doc.get("company_name", "") or doc.get("company", ""),
             location=location,
             link=link,
             source=self.constants.SOURCE_NAME,
             description=doc.get("description", "") or doc.get("summary", ""),
-            salary_range=str(salary),
+            salary_range="",
             employment_type=emp_type,
             search_keyword=keyword,
         )
+
+        if not job.title and not job.company:
+            print(f"  [WARNING] Empty parse — doc keys may have changed: {list(doc.keys())}")
+
+        return job

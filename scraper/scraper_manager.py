@@ -10,8 +10,8 @@ from core.state_manager import StateManager
 from exporter.data_exporter import DataExporter
 
 import re
-import json
 from bs4 import BeautifulSoup
+
 
 class SimplifyScraper:
     """
@@ -89,10 +89,11 @@ class SimplifyScraper:
             print(f"  [scroll] No new batch: {e}")
             return False
 
-    # ── Description fetcher ──────────────────────────────────────────────
+    # ── Batch detail fetcher ─────────────────────────────────────────────
+
     async def _fetch_batch_details(self, jobs: List[JobListing], batch_num: int, total: int) -> None:
         print(f"  [Batch {batch_num}] Fetching details for {len(jobs)} jobs...")
-        for i, job in enumerate(jobs):
+        for job in jobs:
             try:
                 job_id = job.link.split("/")[-1]
                 url = f"{self.constants.API_DETAIL}/{job_id}/company"
@@ -103,21 +104,17 @@ class SimplifyScraper:
                     }
                 """, url)
 
+                # Description
                 job.description = data.get("description") or ""
-                
-                # striping tags using soup
                 soup = BeautifulSoup(job.description, "html.parser")
                 job.description = soup.get_text(separator=" ").strip()
                 job.description = " ".join(job.description.split())
 
+                # Salary
                 min_s    = data.get("min_salary")
                 max_s    = data.get("max_salary")
-                
                 period   = data.get("salary_period")
                 currency = data.get("currency_type", "USD")
-                
-                min_s = data.get("min_salary")
-                max_s = data.get("max_salary")
 
                 if min_s is not None and max_s is not None:
                     period_label = "/hr" if period == 1 else "/yr"
@@ -126,12 +123,14 @@ class SimplifyScraper:
                     job.salary_range = f"{currency} {min_s}+"
                 else:
                     job.salary_range = "Not Disclosed"
+
             except Exception:
-                pass
+                job.salary_range = "Not Disclosed"
 
         print(f"  [Batch {batch_num}] ✓ Done. Total so far: {total}")
 
-    # Main scraping part
+    # ── Main scrape ──────────────────────────────────────────────────────
+
     async def scrape_jobs(
         self,
         filters: Dict[str, Any],
@@ -173,6 +172,9 @@ class SimplifyScraper:
 
         # First batch
         new_jobs = self._flush_captured(keyword, seen_links)
+        if not new_jobs:
+            print("[WARNING] First load returned 0 jobs — API may have changed. Check endpoints.")
+            return []
         pending.extend(new_jobs)
         print(f"  First load: +{len(new_jobs)} jobs (pending: {len(pending)})")
         await drain_pending()
